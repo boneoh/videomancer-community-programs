@@ -1,3 +1,4 @@
 [submodule "videomancer-sdk"]
 	path = videomancer-sdk
 	url = https://github.com/lzxindustries/videomancer-sdk
+	branch = main

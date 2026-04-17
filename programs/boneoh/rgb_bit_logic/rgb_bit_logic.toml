@@ -1,0 +1,160 @@
+# Copyright (C) 2026 Pete Appleby
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# RGB Bit Logic Program Configuration
+#
+# Effect: Per-channel bitwise logic (AND/OR/XOR/NAND/NOR/NXOR) on RGB video with:
+#   - Individual 10-bit mask per channel (selects which bit planes are affected)
+#   - Per-channel wet/dry blend
+#   - Global wet/dry blend (applied after per-channel blend)
+#   - 3-switch operator select (8 operations: AND/OR/XOR/NAND/NOR/NXOR/LFSR/PRNG)
+#   - Invert mask switch (dual-use: invert mask for ops 0-5, vsync-seed for ops 6-7)
+#   - Bypass switch (follows Videomancer convention)
+#
+# Operator encoding (switches 2+3+4 as 3-bit value, S2=LSB, S4=MSB):
+#   S2=Off S3=Off S4=Off -> 0: AND   (pixel AND mask)
+#   S2=On  S3=Off S4=Off -> 1: OR    (pixel OR  mask)
+#   S2=Off S3=On  S4=Off -> 2: XOR   (pixel XOR mask)
+#   S2=On  S3=On  S4=Off -> 3: NAND  (NOT(pixel AND mask))
+#   S2=Off S3=Off S4=On  -> 4: NOR   (NOT(pixel OR  mask))
+#   S2=On  S3=Off S4=On  -> 5: NXOR  (NOT(pixel XOR mask) = XNOR)
+#   S2=Off S3=On  S4=On  -> 6: LFSR  (10-bit LFSR XOR, mask knobs gate bit planes)
+#   S2=On  S3=On  S4=On  -> 7: PRNG  (16-bit LFSR XOR, mask knobs gate bit planes)
+#
+# Switch 1 dual behaviour:
+#   Ops 0-5: Off=normal mask, On=bitwise-invert all masks before applying
+#   Op 6 (LFSR): Off=reseed LFSR from PRNG at vsync, On=LFSR free-runs from power-on
+#   Op 7 (PRNG): Switch 1 has no effect (PRNG always free-runs)
+
+[program]
+program_id = "com.peteappleby.rgb_bit_logic"
+program_name = "RGB Bit Logic"
+program_version = "0.1.0"
+abi_version = ">=1.0,<2.0"
+author = "Pete Appleby"
+license = "GPL-3.0"
+category = "Video Processing"
+description = "Per-channel RGB bitwise logic with blend and LFSR/PRNG modes"
+hardware_compatibility = ["rev_b"]
+core = "yuv444_30b"
+
+# ---------------------------------------------------------------------------
+# KNOBS (Rotary Potentiometers)
+# ---------------------------------------------------------------------------
+
+# Bit mask per channel: 0 = no bits affected, 1023 = all 10 bits affected.
+# In LFSR/PRNG modes the mask gates which bit planes the random value reaches.
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_1"
+name_label = "Red Mask"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 1023
+initial_value = 1023
+display_float_digits = 0
+suffix_label = ""
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_2"
+name_label = "Green Mask"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 1023
+initial_value = 1023
+display_float_digits = 0
+suffix_label = ""
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_3"
+name_label = "Blue Mask"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 1023
+initial_value = 1023
+display_float_digits = 0
+suffix_label = ""
+
+# Per-channel wet/dry blend: 0% = fully dry (original), 100% = fully processed
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_4"
+name_label = "Red Blend"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_5"
+name_label = "Green Blend"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_6"
+name_label = "Blue Blend"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"
+
+# ---------------------------------------------------------------------------
+# SWITCHES (Toggle Switches)
+# ---------------------------------------------------------------------------
+
+# Switch 1: Invert mask (ops 0-5) / LFSR seed mode (ops 6-7)
+[[parameter]]
+parameter_id = "toggle_switch_7"
+name_label = "Invert/Seed"
+value_labels = ["Off/Sync", "On/Free"]
+initial_value_label = "Off/Sync"
+
+# Switches 2-4: Operator select (3-bit encoding, see header for full table)
+[[parameter]]
+parameter_id = "toggle_switch_8"
+name_label = "Op S2"
+value_labels = ["Off", "On"]
+initial_value_label = "Off"
+
+[[parameter]]
+parameter_id = "toggle_switch_9"
+name_label = "Op S3"
+value_labels = ["Off", "On"]
+initial_value_label = "Off"
+
+[[parameter]]
+parameter_id = "toggle_switch_10"
+name_label = "Op S4"
+value_labels = ["Off", "On"]
+initial_value_label = "Off"
+
+# Bypass: last switch by Videomancer convention
+[[parameter]]
+parameter_id = "toggle_switch_11"
+name_label = "Bypass"
+value_labels = ["Process", "Bypass"]
+initial_value_label = "Process"
+
+# ---------------------------------------------------------------------------
+# SLIDER (Linear Potentiometer)
+# ---------------------------------------------------------------------------
+
+# Global blend: applied after per-channel blends
+[[parameter]]
+parameter_id = "linear_potentiometer_12"
+name_label = "Global Blend"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"

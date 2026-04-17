@@ -1,0 +1,160 @@
+# Copyright (C) 2026 Pete Appleby
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# YUV Bit Rotator Program Configuration
+#
+# Effect: Per-channel bit rotation (ROL/ROR) directly on YUV video with:
+#   - Individual rotation amount per channel (0-10 bits, 10-bit wrap = no effect)
+#   - Per-channel wet/dry blend
+#   - Global wet/dry blend (applied after per-channel blend)
+#   - Global ROL/ROR direction switch
+#   - 3-switch bit depth mode (10, 8, 6, 5, 4, 3, 2, 1 bit)
+#   - Bypass switch (last switch, follows Videomancer convention)
+#
+# Note: operates directly in YUV space - no color conversion.
+#   Rotating Y scrambles luminance/brightness.
+#   Rotating U/V scrambles chroma (color hue and saturation).
+
+[program]
+program_id = "com.peteappleby.yuv_bit_rotator"
+program_name = "YUV Bit Rotato"
+program_version = "0.1.0"
+abi_version = ">=1.0,<2.0"
+author = "Pete Appleby"
+license = "GPL-3.0"
+category = "Video Processing"
+description = "Per-channel YUV bit rotation with blend and lo-fi bit depth modes"
+hardware_compatibility = ["rev_b"]
+core = "yuv444_30b"
+
+# ---------------------------------------------------------------------------
+# KNOBS (Rotary Potentiometers)
+# ---------------------------------------------------------------------------
+
+# Rotation amount per channel: 0 = no effect, 1-9 = rotate, 10 = no effect (full wrap)
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_1"
+name_label = "Y Rotation"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 10
+initial_value = 512
+display_float_digits = 0
+suffix_label = "bit"
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_2"
+name_label = "U Rotation"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 10
+initial_value = 512
+display_float_digits = 0
+suffix_label = "bit"
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_3"
+name_label = "V Rotation"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 10
+initial_value = 512
+display_float_digits = 0
+suffix_label = "bit"
+
+# Per-channel wet/dry blend: 0% = fully dry (original), 100% = fully processed
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_4"
+name_label = "Y Blend"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_5"
+name_label = "U Blend"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_6"
+name_label = "V Blend"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"
+
+# ---------------------------------------------------------------------------
+# SWITCHES (Toggle Switches)
+# ---------------------------------------------------------------------------
+
+# Rotation direction: applies globally to all three channels
+[[parameter]]
+parameter_id = "toggle_switch_7"
+name_label = "Direction"
+value_labels = ["Left", "Right"]
+initial_value_label = "Left"
+
+# Bit depth mode: 3 switches = 8 combinations
+# S1=Off S2=Off S3=Off -> 10-bit (full quality)
+# S1=On  S2=Off S3=Off ->  8-bit (mild crunch)
+# S1=Off S2=On  S3=Off ->  6-bit (lo-fi)
+# S1=On  S2=On  S3=Off ->  5-bit (medium lo-fi)
+# S1=Off S2=Off S3=On  ->  4-bit (heavy crunch)
+# S1=On  S2=Off S3=On  ->  3-bit (very aggressive)
+# S1=Off S2=On  S3=On  ->  2-bit (extreme)
+# S1=On  S2=On  S3=On  ->  1-bit (pure posterise)
+
+[[parameter]]
+parameter_id = "toggle_switch_8"
+name_label = "Depth S1"
+value_labels = ["Off", "On"]
+initial_value_label = "Off"
+
+[[parameter]]
+parameter_id = "toggle_switch_9"
+name_label = "Depth S2"
+value_labels = ["Off", "On"]
+initial_value_label = "Off"
+
+[[parameter]]
+parameter_id = "toggle_switch_10"
+name_label = "Depth S3"
+value_labels = ["Off", "On"]
+initial_value_label = "Off"
+
+# Bypass: last switch by Videomancer convention
+[[parameter]]
+parameter_id = "toggle_switch_11"
+name_label = "Bypass"
+value_labels = ["Process", "Bypass"]
+initial_value_label = "Process"
+
+# ---------------------------------------------------------------------------
+# SLIDER (Linear Potentiometer)
+# ---------------------------------------------------------------------------
+
+# Global blend: applied after per-channel blends
+# 0% = fully dry (original signal)
+# 100% = fully processed (per-channel blend outputs passed through)
+
+[[parameter]]
+parameter_id = "linear_potentiometer_12"
+name_label = "Global Blend"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"

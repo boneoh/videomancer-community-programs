@@ -36,12 +36,13 @@
 --
 -- Pipeline:
 --   Stage 0 (input register + CSC forward):     1 clock  -> T+1
---   Stage 1 (phase + symmetry offset):          1 clock  -> T+2
---   Stage 2 (frequency multiply):               1 clock  -> T+3
---   Stage 3 (fold + shape select):              1 clock  -> T+4
---   Stage 4 (invert + CSC reverse + clamp):     1 clock  -> T+5
---   interpolator_u x3 (wet/dry mix):            4 clocks -> T+9
---   Total: 9 clocks
+    --   Stage 1 (phase + symmetry offset):          1 clock  -> T+2
+    --   Stage 2 (frequency multiply):               1 clock  -> T+3
+    --   Stage 2.5 (sin_cos register, timing fix):   1 clock  -> T+4
+    --   Stage 3 (fold + shape select):              1 clock  -> T+5
+    --   Stage 4 (invert + CSC reverse + clamp):     1 clock  -> T+6
+    --   interpolator_u x3 (wet/dry mix):            4 clocks -> T+10
+    --   Total: 10 clocks
 --
 -- Submodules:
 --   inline IIR LPF x3: line-reset IIR LPF (19-bit precision, no cross-line bleed)
@@ -64,7 +65,7 @@
 --
 -- Timing:
 --   C_PROCESSING_DELAY_CLKS = 5 (inline stages)
---   C_SYNC_DELAY_CLKS       = 9 (5 + 4 interpolator)
+    --   C_SYNC_DELAY_CLKS       = 10 (6 + 4 interpolator)
 
 --------------------------------------------------------------------------------
 
@@ -81,8 +82,8 @@ use work.video_timing_pkg.all;
 architecture wrinkle of program_top is
 
     constant C_VIDEO_DATA_WIDTH      : integer := 10;
-    constant C_PROCESSING_DELAY_CLKS : integer := 5;
-    constant C_SYNC_DELAY_CLKS       : integer := 9;
+    constant C_PROCESSING_DELAY_CLKS : integer := 6;
+    constant C_SYNC_DELAY_CLKS       : integer := 10;
 
     -- Frequency encoding: freq_factor = (knob >> 2) + 4 = 4..259 (8 bits)
     -- product = channel * freq_factor (10x8 = 18 bits)
@@ -142,6 +143,20 @@ architecture wrinkle of program_top is
     signal s_sin0_raw : signed(9 downto 0);
     signal s_sin1_raw : signed(9 downto 0);
     signal s_sin2_raw : signed(9 downto 0);
+
+    -- Stage 2.5: registered pipeline to break long sin_cos combinational path
+    signal s2p5_sin0  : signed(9 downto 0)   := (others => '0');
+    signal s2p5_sin1  : signed(9 downto 0)   := (others => '0');
+    signal s2p5_sin2  : signed(9 downto 0)   := (others => '0');
+    signal s2p5_tri0  : unsigned(9 downto 0) := (others => '0');
+    signal s2p5_tri1  : unsigned(9 downto 0) := to_unsigned(512, 10);
+    signal s2p5_tri2  : unsigned(9 downto 0) := to_unsigned(512, 10);
+    signal s2p5_saw0  : unsigned(9 downto 0) := (others => '0');
+    signal s2p5_saw1  : unsigned(9 downto 0) := (others => '0');
+    signal s2p5_saw2  : unsigned(9 downto 0) := (others => '0');
+    signal s2p5_sign0 : std_logic := '0';
+    signal s2p5_sign1 : std_logic := '0';
+    signal s2p5_sign2 : std_logic := '0';
 
     -- Dry delay / bypass delay / interp valid
     signal s_dry_y        : unsigned(9 downto 0);
@@ -453,7 +468,30 @@ begin
                   sin_out  => s_sin2_raw, cos_out => open);
 
     -- =========================================================================
-    -- Stage 3 (T+4): Shape select
+    -- Stage 2.5 (T+4): Register sin_cos and fold outputs
+    --   Breaks the long combinational path through the sin_cos LUT tables
+    --   to improve timing on high-utilization builds.
+    -- =========================================================================
+    p_stage2p5 : process(clk)
+    begin
+        if rising_edge(clk) then
+            s2p5_sin0  <= s_sin0_raw;
+            s2p5_sin1  <= s_sin1_raw;
+            s2p5_sin2  <= s_sin2_raw;
+            s2p5_tri0  <= s_tri0;
+            s2p5_tri1  <= s_tri1;
+            s2p5_tri2  <= s_tri2;
+            s2p5_saw0  <= unsigned(s2_prod0(11 downto 2));
+            s2p5_saw1  <= unsigned(s2_prod1(11 downto 2));
+            s2p5_saw2  <= unsigned(s2_prod2(11 downto 2));
+            s2p5_sign0 <= s2_prod0(12);
+            s2p5_sign1 <= s2_prod1(12);
+            s2p5_sign2 <= s2_prod2(12);
+        end if;
+    end process p_stage2p5;
+
+    -- =========================================================================
+    -- Stage 3 (T+5): Shape select
     --   00=Triangle, 01=Sine, 10=Sawtooth, 11=Square
     -- =========================================================================
     p_stage3 : process(clk)
@@ -462,29 +500,29 @@ begin
         variable v_sin2 : unsigned(9 downto 0);
     begin
         if rising_edge(clk) then
-            v_sin0 := unsigned(std_logic_vector(s_sin0_raw + to_signed(512, 10)));
-            v_sin1 := unsigned(std_logic_vector(s_sin1_raw + to_signed(512, 10)));
-            v_sin2 := unsigned(std_logic_vector(s_sin2_raw + to_signed(512, 10)));
+            v_sin0 := unsigned(std_logic_vector(s2p5_sin0 + to_signed(512, 10)));
+            v_sin1 := unsigned(std_logic_vector(s2p5_sin1 + to_signed(512, 10)));
+            v_sin2 := unsigned(std_logic_vector(s2p5_sin2 + to_signed(512, 10)));
 
             case r_shape is
                 when "00" =>
-                    s3_ch0 <= s_tri0;
-                    s3_ch1 <= s_tri1;
-                    s3_ch2 <= s_tri2;
+                    s3_ch0 <= s2p5_tri0;
+                    s3_ch1 <= s2p5_tri1;
+                    s3_ch2 <= s2p5_tri2;
                 when "01" =>
                     s3_ch0 <= v_sin0;
                     s3_ch1 <= v_sin1;
                     s3_ch2 <= v_sin2;
                 when "10" =>
-                    s3_ch0 <= unsigned(s2_prod0(11 downto 2));
-                    s3_ch1 <= unsigned(s2_prod1(11 downto 2));
-                    s3_ch2 <= unsigned(s2_prod2(11 downto 2));
+                    s3_ch0 <= s2p5_saw0;
+                    s3_ch1 <= s2p5_saw1;
+                    s3_ch2 <= s2p5_saw2;
                 when others =>
-                    if s2_prod0(12) = '0' then s3_ch0 <= to_unsigned(1023, 10);
+                    if s2p5_sign0 = '0' then s3_ch0 <= to_unsigned(1023, 10);
                     else s3_ch0 <= to_unsigned(0, 10); end if;
-                    if s2_prod1(12) = '0' then s3_ch1 <= to_unsigned(1023, 10);
+                    if s2p5_sign1 = '0' then s3_ch1 <= to_unsigned(1023, 10);
                     else s3_ch1 <= to_unsigned(0, 10); end if;
-                    if s2_prod2(12) = '0' then s3_ch2 <= to_unsigned(1023, 10);
+                    if s2p5_sign2 = '0' then s3_ch2 <= to_unsigned(1023, 10);
                     else s3_ch2 <= to_unsigned(0, 10); end if;
             end case;
         end if;

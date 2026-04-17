@@ -1,0 +1,154 @@
+# Copyright (C) 2026 Pete Appleby
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# YUV Bit Crush Program Configuration
+#
+# Effect: Per-channel bit-depth reduction (bit crushing) operating directly in
+#   YUV space — no colour conversion. Y, U, and V channels are all crushed.
+#   Y is always truncated (floor). U and V support round-to-nearest and dither.
+#
+# Crush amount mapping (all channels): crush_n = 2 + (knob * 7) / 1024, capped at 8
+#   knob=0:    crush 2  (zero bits 1:0 — minimum perceptible)
+#   knob~147:  crush 3  (zero bits 2:0)
+#   knob~293:  crush 4  (zero bits 3:0)
+#   knob~439:  crush 5  (zero bits 4:0)
+#   knob~586:  crush 6  (zero bits 5:0)
+#   knob~732:  crush 7  (zero bits 6:0)
+#   knob=1023: crush 8  (zero bits 7:0 — maximum)
+#
+# Dither (Switch 2, On): adds pseudorandom noise before crushing U and V,
+#   reducing quantisation banding at the cost of added grain. Y is unaffected.
+
+[program]
+program_id = "com.peteappleby.yuv_bit_crush"
+program_name = "YUV Bit Crush"
+program_version = "0.1.1"
+abi_version = ">=1.0,<2.0"
+author = "Pete Appleby"
+license = "GPL-3.0"
+category = "Video Processing"
+description = "YUV bit crushing with Y brightness trim, dither, and per-channel round/blend"
+hardware_compatibility = ["rev_b"]
+core = "yuv444_30b"
+
+# ---------------------------------------------------------------------------
+# KNOBS (Rotary Potentiometers)
+# ---------------------------------------------------------------------------
+
+# Crush amount for Y, U, and V: minimum = 2 bits, maximum = 8 bits.
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_1"
+name_label = "Y Crush"
+control_mode = "linear"
+display_min_value = 2
+display_max_value = 8
+initial_value = 0
+display_float_digits = 0
+suffix_label = ""
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_2"
+name_label = "U Crush"
+control_mode = "linear"
+display_min_value = 2
+display_max_value = 8
+initial_value = 0
+display_float_digits = 0
+suffix_label = ""
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_3"
+name_label = "V Crush"
+control_mode = "linear"
+display_min_value = 2
+display_max_value = 8
+initial_value = 0
+display_float_digits = 0
+suffix_label = ""
+
+# Per-channel wet/dry blend: 0% = fully dry (original), 100% = fully processed
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_4"
+name_label = "Y Blend"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_5"
+name_label = "U Blend"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_6"
+name_label = "V Blend"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"
+
+# ---------------------------------------------------------------------------
+# SWITCHES (Toggle Switches)
+# ---------------------------------------------------------------------------
+
+# Switch 1: Invert — bitwise-NOT Y/U/V after processing
+[[parameter]]
+parameter_id = "toggle_switch_7"
+name_label = "Invert"
+value_labels = ["Off", "On"]
+initial_value_label = "Off"
+
+# Switch 2: Dither — add pseudorandom noise before crushing U and V
+[[parameter]]
+parameter_id = "toggle_switch_8"
+name_label = "Dither"
+value_labels = ["Off", "On"]
+initial_value_label = "Off"
+
+# Switch 3: U Round — rounding mode for the U channel
+[[parameter]]
+parameter_id = "toggle_switch_9"
+name_label = "U Round"
+value_labels = ["Off/Trunc", "On/Round"]
+initial_value_label = "Off/Trunc"
+
+# Switch 4: V Round — rounding mode for the V channel
+[[parameter]]
+parameter_id = "toggle_switch_10"
+name_label = "V Round"
+value_labels = ["Off/Trunc", "On/Round"]
+initial_value_label = "Off/Trunc"
+
+# Bypass: last switch by Videomancer convention
+[[parameter]]
+parameter_id = "toggle_switch_11"
+name_label = "Bypass"
+value_labels = ["Process", "Bypass"]
+initial_value_label = "Process"
+
+# ---------------------------------------------------------------------------
+# SLIDER (Linear Potentiometer)
+# ---------------------------------------------------------------------------
+
+# Global blend: applied after per-channel blends
+[[parameter]]
+parameter_id = "linear_potentiometer_12"
+name_label = "Global Blend"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"

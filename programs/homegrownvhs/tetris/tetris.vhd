@@ -1313,21 +1313,33 @@ begin
                 v_dx := v_sx;
                 if v_dx >= 0 and v_dx < C_DIGIT_W * s_digit_h_scale then
                     s_stg4a_in_d0 <= '1';
-                    s_stg4a_fc0   <= v_dx / s_digit_h_scale;
+                    if s_digit_h_scale = 4 then
+                        s_stg4a_fc0 <= v_dx / 4;
+                    else
+                        s_stg4a_fc0 <= v_dx / 2;
+                    end if;
                 end if;
 
                 -- Digit 1 (tens)
                 v_dx := v_sx - (C_DIGIT_W + 1) * s_digit_h_scale;
                 if v_dx >= 0 and v_dx < C_DIGIT_W * s_digit_h_scale then
                     s_stg4a_in_d1 <= '1';
-                    s_stg4a_fc1   <= v_dx / s_digit_h_scale;
+                    if s_digit_h_scale = 4 then
+                        s_stg4a_fc1 <= v_dx / 4;
+                    else
+                        s_stg4a_fc1 <= v_dx / 2;
+                    end if;
                 end if;
 
                 -- Digit 2 (ones)
                 v_dx := v_sx - 2 * (C_DIGIT_W + 1) * s_digit_h_scale;
                 if v_dx >= 0 and v_dx < C_DIGIT_W * s_digit_h_scale then
                     s_stg4a_in_d2 <= '1';
-                    s_stg4a_fc2   <= v_dx / s_digit_h_scale;
+                    if s_digit_h_scale = 4 then
+                        s_stg4a_fc2 <= v_dx / 4;
+                    else
+                        s_stg4a_fc2 <= v_dx / 2;
+                    end if;
                 end if;
 
                 -- Pre-compute font ROM addresses
