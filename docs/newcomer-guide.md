@@ -11,7 +11,7 @@ This guide assumes nothing. If a step seems obvious, skip it.
 3. [Install prerequisites and clone the repository](#3-install-prerequisites-and-clone-the-repository)
 4. [Build the repository](#4-build-the-repository)
 5. [Create your own program from `passthru`](#5-create-your-own-program-from-passthru)
-6. [Load the program onto Videomancer (LZX Connect / microSD)](#6-load-the-program-onto-videomancer-lzx-connect--microsd)
+6. [Load the program onto Videomancer with LZX Connect](#6-load-the-program-onto-videomancer-with-lzx-connect)
 7. [Submit a pull request back to this repository](#7-submit-a-pull-request-back-to-this-repository)
 8. [Where to get help](#8-where-to-get-help)
 
@@ -339,72 +339,52 @@ When you are ready to write something more interesting than an inverter:
 
 ---
 
-## 6. Load the program onto Videomancer (LZX Connect / microSD)
+## 6. Load the program onto Videomancer with LZX Connect
 
-There are two ways to get a `.vmprog` file onto Videomancer. Today, **microSD card** is the supported method for loading user programs. **LZX Connect** is currently a desktop application for firmware updates; library/program management is planned but not yet shipping. Both paths are described below so you can use whichever fits.
+[LZX Connect](https://lzxindustries.net/connect) is the official desktop companion app for Videomancer. Its **Load VMPROG File** button streams your `.vmprog` directly to the FPGA over USB — no microSD card, no copying files by hand, no Developer Mode toggle, no reboot. The program loads immediately and appears on the device as if you had selected it from the menu.
 
-### 6.1 Method A — microSD card (works today)
+### 6.1 Install LZX Connect
 
-#### 6.1.1 Format the card
+1. Open https://lzxindustries.net/connect in a web browser.
+2. Download the build for your platform: **Windows**, **macOS**, or **Linux**. (Releases are hosted on GitHub at https://github.com/lzxindustries/videomancer-firmware/releases under the `connect/*` tags.)
+3. Install:
+   - **Windows**: run the `.msi` installer (or `.exe` setup) and follow the prompts. If SmartScreen blocks it, click **More info → Run anyway**.
+   - **macOS**: open the `.dmg`, drag **LZX Connect** into **Applications**, then launch it from Applications. The first launch may show "cannot be opened because it is from an unidentified developer" — open **System Settings → Privacy & Security**, scroll to the LZX Connect message, and click **Open Anyway**.
+   - **Linux**: install the `.deb` (Debian/Ubuntu) or run the `.AppImage` directly:
+     ```bash
+     chmod +x LZX_Connect-*.AppImage
+     ./LZX_Connect-*.AppImage
+     ```
+     The AppImage does not install udev rules; if your user cannot access the serial port, add yourself to the `dialout` group: `sudo usermod -aG dialout $USER`, then log out and back in.
 
-- Use any microSD card up to 2 TB.
-- Format it **FAT32** on your computer. (Videomancer also accepts FAT12, FAT16, and exFAT, but FAT32 is the recommended default.)
-  - **Linux**: use `gnome-disks`, KDE's Partition Manager, or `mkfs.vfat -F 32 /dev/sdX1` (replace `sdX1` with the correct device — *be very careful, this command erases the target*).
-  - **macOS**: open **Disk Utility**, select the card, click **Erase**, choose **MS-DOS (FAT)**.
-  - **Windows**: right-click the card in File Explorer → **Format** → File system **FAT32**.
-
-#### 6.1.2 Copy the `.vmprog`
-
-Just copy `out/rev_b/janedoe/my_first_program.vmprog` to the card. Folder structure does not matter — Videomancer recursively scans the entire card for `.vmprog` files. A clean layout helps you stay organised:
-
-```
-<microSD>/
-└── community/
-    └── janedoe/
-        └── my_first_program.vmprog
-```
-
-Eject the card cleanly from your operating system before removing it.
-
-#### 6.1.3 Insert the card and enable Developer Mode
-
-Third-party programs (anything with a version below `1.0.0`, or any program not signed by LZX) are hidden by default. Turn on **Developer Mode** so they appear in the program list:
+### 6.2 Connect Videomancer
 
 1. Power Videomancer on.
-2. Press the **SYSTEM** button.
-3. Turn the **Rotary Encoder** until the display shows **Developer Mode**.
-4. Press the encoder, turn it to **Enabled**, press to confirm.
-5. When asked **Restart Device?**, select **Yes**.
+2. Connect the computer to Videomancer's **USB-C Device** port (the one labeled for firmware/host PC, **not** the Host port used for keyboards and game controllers) using a **USB-A to USB-C** or **USB-C to USB-C** cable.
+3. Launch LZX Connect. Within a few seconds your unit appears as a device card showing its firmware version and connection status.
 
-After reboot, Videomancer rescans internal flash and the microSD card, including your new program.
+### 6.3 Load your `.vmprog`
 
-#### 6.1.4 Load and test
+1. On your device card in LZX Connect, click **Load VMPROG File**.
+2. In the file picker, browse to and select the `.vmprog` you built — for example `out/rev_b/janedoe/my_first_program.vmprog`.
+3. LZX Connect validates the file (header check, format version), then streams it to Videomancer. A progress bar cycles through the phases **Preparing → Streaming → Loading → Complete**.
+4. Videomancer's LCD shows **Loading…** with your program's `program_name`, then switches to the State screen showing the loaded program.
+5. Apply a video signal. If you built the color inverter from section 5.6 you should see the input with inverted luma and chroma.
+6. The Parameter knobs are bound to whatever registers your TOML declares. The unmodified passthru ignores all of them.
 
-1. Press **SYSTEM** so the top row shows the currently loaded program name.
-2. Press the **Rotary Encoder** — a `>` cursor appears on the left.
-3. Turn the encoder until you see **My First Program** (or whatever you set in `program_name`).
-4. Press the encoder to load it. Outputs go dark for a few seconds during reconfiguration.
-5. Apply a video signal. If you used the inverter from section 5.6 you should see the picture with inverted luma and chroma.
-6. The Parameter knobs map to the registers your program defines in its TOML. The unmodified passthru ignores all of them.
+That's it — no SD card, no Developer Mode, no reboot. The sideload path accepts unsigned development builds by design, so you can iterate as fast as your build cycle allows.
 
-### 6.2 Method B — LZX Connect (firmware updates today, library management planned)
+### 6.4 Things to know
 
-LZX Connect is the official LZX desktop application. As of the time of writing, its public role is **firmware updates** for Videomancer (and forthcoming Chromagnon). Program library/sideloading features are on the roadmap but are not yet released.
+- **Sideloaded programs are not persistent.** They run until the next program switch or power cycle. To reload after a reboot, just click **Load VMPROG File** again. This is a feature: it keeps your in-progress builds out of the device's persistent program list.
+- **No SD card needed.** The streaming path bypasses the filesystem entirely. You can leave the SD card slot empty.
+- **Firmware version.** Direct streaming requires recent Videomancer firmware. If LZX Connect reports an older firmware, click **Check for Updates** on the device card and install the latest release before sideloading. Firmware update over USB is built into the same app.
+- **One operation at a time.** While an upload is in progress, the other action buttons on the device card are disabled. Wait for **Complete** before starting another action.
+- **If the upload fails.** LZX Connect shows the error and the device automatically falls back to the previous program (or Passthru). Fix the issue (rebuild, reconnect cable, etc.) and click **Load VMPROG File** again.
 
-If you want to install LZX Connect now (e.g., to update firmware before testing your program):
+### 6.5 Want a permanent install on the device?
 
-1. Visit https://lzxindustries.net/connect.
-2. Download the build for **Windows**, **macOS**, or **Linux**.
-3. Install it like any other desktop application:
-   - **Windows**: run the installer, follow prompts.
-   - **macOS**: open the `.dmg`, drag the app to **Applications**, right-click → **Open** the first time to bypass Gatekeeper.
-   - **Linux**: extract the archive (or install the provided package) and run the binary.
-4. Connect Videomancer to the computer with a **USB-A to USB-C** cable into Videomancer's **Device** port (not the Host port).
-5. Launch LZX Connect; follow the in-app prompts to update firmware.
-
-When LZX Connect adds program-library management, this guide will be updated. Until then, **use the microSD method in section 6.1 to deploy your `.vmprog` files**.
-
-> Manual firmware update without LZX Connect (in case you prefer it) is documented in the [Videomancer User Manual — Firmware Update section](https://lzxindustries.net/instruments/videomancer/manual/user-manual). It involves copying a `.UF2` file to a USB mass-storage device that appears when Videomancer is booted with the **BOOT** button held.
+If you want a program to appear in Videomancer's built-in program list across reboots, that path goes through the official LZX **Program Library** mechanism — submit it as a pull request (section 7), and signed releases land in the library that LZX Connect installs to the SD card via **Install Program Library**. Sideload is the right tool while you're developing; the library is the right destination for finished work.
 
 ---
 
