@@ -76,6 +76,7 @@ out/
 
 ## 📚 Documentation
 
+- **[Newcomer's Guide](docs/newcomer-guide.md)** - Step-by-step walkthrough for absolute beginners: GitHub, cloning, building, creating a program from `passthru`, loading it onto hardware, and submitting a pull request
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** - How to contribute programs to this repository
 - **[Program Development Guide](videomancer-sdk/docs/program-development-guide.md)** - Complete VHDL development workflow
 - **[TOML Configuration Guide](videomancer-sdk/docs/toml-config-guide.md)** - Program configuration format

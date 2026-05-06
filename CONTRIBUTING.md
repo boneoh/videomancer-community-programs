@@ -22,6 +22,8 @@ Community members can contribute new video processing programs by:
 3. Ensuring it builds successfully
 4. Submitting a pull request
 
+> **New to GitHub, FPGA development, or VHDL?** Start with the [Newcomer's Guide](docs/newcomer-guide.md), which walks through every step end-to-end on Linux, macOS, and Windows.
+
 ## Program Submission Guidelines
 
 ### Directory Structure
