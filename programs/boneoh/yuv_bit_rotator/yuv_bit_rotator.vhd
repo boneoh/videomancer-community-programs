@@ -21,17 +21,21 @@
 --
 -- Architecture:
 --   Stage 0a - Control Decode (1 clock):
---     - Register decoded shift amounts for Y, U, V channels
---     - Register decoded bit depth
---     - Register direction flag
+--     - Fold direction into effective ROL shift via to_eff_shift() — eliminates
+--       the direction mux from Stage 0b's critical path
+--     - Register decoded bit depth mask
 --     - Delay data_in by 1 clock for Stage 0b
 --     - Critical path: registers_in -> comparisons (raw_to_shift) -> register
 --
---   Stage 0b - Bit Depth Mask + Rotation (1 clock):
---     - Apply bit depth mask to Y, U, V (active video only)
---     - Apply ROL or ROR using pre-registered shift amounts
---     - Critical path: registered data -> AND mask -> bit mux -> register
---       (no comparisons on critical path; shift amounts already registered)
+--   Stage 0b - Input Clamp + Bit Rotation (1 clock):
+--     - Clamp near-neutral Y/U/V values before rotation to prevent artifacts
+--       (Y < 32 → 0; |U-512| < 32 → 512; |V-512| < 32 → 512)
+--     - Apply ROL using pre-registered effective shift amounts (single 10-way mux)
+--     - Critical path: registered data -> 10-way ROL mux -> register
+--
+--   Stage 0c - Bit Depth Masking (1 clock):
+--     - AND rotated values with pre-registered depth mask
+--     - Critical path: registered_pre -> AND registered_mask -> register
 --
 --   Stage 1 - Per-Channel Blend (4 clocks, 3x interpolator_u parallel):
 --     - Blends original YUV (dry) with rotated YUV (wet) per channel
@@ -40,7 +44,7 @@
 --     - Blends original YUV (dry, delayed) with per-channel blended output
 --
 --   Bypass / Output avid:
---     - 10-clock delay line matches full processing pipeline
+--     - 11-clock delay line matches full processing pipeline
 --     - toggle_switch_11 routes delayed YUV input directly to output
 --     - data_out.avid is driven from s_global_y_valid (end of interpolator chain)
 --
@@ -65,14 +69,15 @@
 --   100=4bit   101=3bit  110=2bit  111=1bit
 --
 -- Timing:
---   Total pipeline latency: 10 clock cycles
+--   Total pipeline latency: 11 clock cycles
 --     Stage 0a (control decode):       1 clock  -> T+1
---     Stage 0b (mask + rotate):        1 clock  -> T+2
---     Stage 1  (per-channel blend):    4 clocks -> T+6
---     Stage 2  (global blend):         4 clocks -> T+10
+--     Stage 0b (clamp + rotate):       1 clock  -> T+2
+--     Stage 0c (depth mask):           1 clock  -> T+3
+--     Stage 1  (per-channel blend):    4 clocks -> T+7
+--     Stage 2  (global blend):         4 clocks -> T+11
 --
---   Pre-global delay: 6 clocks (T+0 + 6 = T+6, aligned with Stage 1 output)
---   Bypass delay:    10 clocks (matches full pipeline)
+--   Pre-global delay: 7 clocks (T+0 + 7 = T+7, aligned with Stage 1 output)
+--   Bypass delay:    11 clocks (matches full pipeline)
 --------------------------------------------------------------------------------
 library ieee;
 use ieee.std_logic_1164.all;
@@ -88,13 +93,24 @@ architecture yuv_bit_rotator of program_top is
     --------------------------------------------------------------------------------
     -- Constants
     --------------------------------------------------------------------------------
-    -- Total pipeline latency: 1 + 1 + 4 + 4 = 10 clocks
-    constant C_PROCESSING_DELAY_CLKS : integer := 10;
+    -- Total pipeline latency: 1 + 1 + 1 + 4 + 4 = 11 clocks
+    constant C_PROCESSING_DELAY_CLKS : integer := 11;
+
+    -- Radius of the U/V neutral bypass zone around 512.
+    -- If the original U or V value falls within
+    -- [512 - C_UV_CLAMP_RADIUS, 512 + C_UV_CLAMP_RADIUS), the rotation result
+    -- is discarded and 512 (neutral chroma) is written directly to the output.
+    -- This bypass is necessary because rotating 512 (0b1000000000) by any
+    -- non-zero shift produces a non-neutral value (e.g. rol10(512,1) = 1),
+    -- so pre-clamping to 512 and then rotating does not help.
+    -- Increase C_UV_CLAMP_RADIUS if background areas still show a colour cast;
+    -- decrease to preserve intentional subtle colour in dark regions.
+    constant C_UV_CLAMP_RADIUS : integer := 32;
 
     -- Delay for global blend "dry" YUV input.
-    -- Original YUV valid at T+0. Stage 1 output valid at T+6.
-    -- Delay original by 6 clocks: T+0+6 = T+6. Aligned.
-    constant C_PRE_GLOBAL_DELAY_CLKS : integer := 6;
+    -- Original YUV valid at T+0. Stage 1 output valid at T+7.
+    -- Delay original by 7 clocks: T+0+7 = T+7. Aligned.
+    constant C_PRE_GLOBAL_DELAY_CLKS : integer := 7;
 
     --------------------------------------------------------------------------------
     -- Functions
@@ -174,6 +190,23 @@ architecture yuv_bit_rotator of program_top is
         end if;
     end function;
 
+    -- Converts a raw shift amount (0-10) and direction flag into an effective
+    -- ROL-only shift (0-9).  Since ror10(x,k) = rol10(x, 10-k), folding
+    -- direction into the shift amount in Stage 0a lets Stage 0b use a single
+    -- 10-way ROL mux instead of a 20-way ROL/ROR mux, saving ~1 LUT level on
+    -- the critical path.
+    function to_eff_shift(shift : integer; direction : std_logic)
+        return integer is
+        variable m : integer;
+    begin
+        m := shift mod 10;          -- normalise to 0-9 (handles the "return 10" edge case)
+        if direction = '0' then     -- ROL: use shift directly
+            return m;
+        else                        -- ROR k = ROL (10-k); ROR 0 = ROL 0
+            return (10 - m) mod 10;
+        end if;
+    end function;
+
     -- Decode active bit depth from three switch bits (S3:S2:S1).
     function get_bit_depth(s1, s2, s3 : std_logic) return integer is
     begin
@@ -223,13 +256,13 @@ architecture yuv_bit_rotator of program_top is
     --------------------------------------------------------------------------------
     -- Stage 0a: Control Decode Signals (T+1)
     -- Registered decoded controls and 1-cycle delayed data.
+    -- Direction is folded into the shift via to_eff_shift(), so Stage 0b uses a
+    -- single 10-way ROL mux instead of a 20-way ROL/ROR mux.
     --------------------------------------------------------------------------------
-    signal s_shift_y_r      : integer range 0 to 10 := 0;
-    signal s_shift_u_r      : integer range 0 to 10 := 0;
-    signal s_shift_v_r      : integer range 0 to 10 := 0;
-    signal s_depth_r        : integer range 1 to 10 := 10;
+    signal s_eff_shift_y_r  : integer range 0 to 9 := 0;
+    signal s_eff_shift_u_r  : integer range 0 to 9 := 0;
+    signal s_eff_shift_v_r  : integer range 0 to 9 := 0;
     signal s_mask_r         : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0) := (others => '1');
-    signal s_direction_r    : std_logic := '0';
     signal s_y_d1           : std_logic_vector(C_VIDEO_DATA_WIDTH - 1 downto 0)
                                           := (others => '0');
     signal s_u_d1           : std_logic_vector(C_VIDEO_DATA_WIDTH - 1 downto 0)
@@ -239,17 +272,30 @@ architecture yuv_bit_rotator of program_top is
     signal s_avid_d1        : std_logic := '0';
 
     --------------------------------------------------------------------------------
-    -- Stage 0b: Rotation Signals (T+2)
+    -- Stage 0b: Clamp + Rotation Signals (T+2)
+    -- Rotation only — mask applied in Stage 0c.
+    --------------------------------------------------------------------------------
+    signal s_rotated_pre_y      : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
+    signal s_rotated_pre_u      : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
+    signal s_rotated_pre_v      : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
+    signal s_rotated_pre_valid  : std_logic;
+    -- Unclamped data forwarded T+1→T+2 for the dry path
+    signal s_y_d2               : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
+    signal s_u_d2               : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
+    signal s_v_d2               : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
+
+    --------------------------------------------------------------------------------
+    -- Stage 0c: Bit Depth Masking Signals (T+3)
     --------------------------------------------------------------------------------
     signal s_rotated_y      : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
     signal s_rotated_u      : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
     signal s_rotated_v      : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
     signal s_rotated_valid  : std_logic;
 
-    -- 2-cycle delayed originals for per-channel blend dry input (aligned with T+2)
-    signal s_orig_y_d2      : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
-    signal s_orig_u_d2      : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
-    signal s_orig_v_d2      : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
+    -- 3-cycle delayed originals for per-channel blend dry input (aligned with T+3)
+    signal s_orig_y_d3      : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
+    signal s_orig_u_d3      : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
+    signal s_orig_v_d3      : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
 
     --------------------------------------------------------------------------------
     -- Stage 1: Per-Channel Blend Signals (T+6)
@@ -304,24 +350,24 @@ begin
     --------------------------------------------------------------------------------
     -- Stage 0a: Control Decode
     -- Latency: 1 clock. Input T+0, output T+1.
-    -- Registers decoded shift amounts and bit depth so that Stage 0b sees them
-    -- as registered inputs, removing them from the Stage 0b critical path.
+    -- Direction is folded into the shift via to_eff_shift(), eliminating the
+    -- direction mux from Stage 0b's critical path.  The depth mask is also
+    -- pre-registered so Stage 0c has only a single AND gate on its critical path.
     -- Also delays data_in by 1 clock to align with the registered controls.
     --------------------------------------------------------------------------------
     p_decode_stage : process(clk)
     begin
         if rising_edge(clk) then
-            -- Decode and register shift amounts for each channel
-            s_shift_y_r   <= raw_to_shift(unsigned(registers_in(0)));
-            s_shift_u_r   <= raw_to_shift(unsigned(registers_in(1)));
-            s_shift_v_r   <= raw_to_shift(unsigned(registers_in(2)));
+            -- Decode shift and fold in direction for a single 10-way ROL mux in Stage 0b
+            s_eff_shift_y_r <= to_eff_shift(raw_to_shift(unsigned(registers_in(0))),
+                                             registers_in(6)(0));
+            s_eff_shift_u_r <= to_eff_shift(raw_to_shift(unsigned(registers_in(1))),
+                                             registers_in(6)(0));
+            s_eff_shift_v_r <= to_eff_shift(raw_to_shift(unsigned(registers_in(2))),
+                                             registers_in(6)(0));
 
-            -- Decode and register bit depth and pre-compute mask
-            s_depth_r     <= get_bit_depth(s_bit_depth_s1, s_bit_depth_s2, s_bit_depth_s3);
+            -- Pre-register bit depth mask
             s_mask_r      <= depth_to_mask(get_bit_depth(s_bit_depth_s1, s_bit_depth_s2, s_bit_depth_s3));
-
-            -- Register direction flag
-            s_direction_r <= s_direction;
 
             -- Delay data by 1 clock to align with registered controls
             s_y_d1    <= data_in.y;
@@ -332,62 +378,111 @@ begin
     end process p_decode_stage;
 
     --------------------------------------------------------------------------------
-    -- Stage 0b: Bit Depth Masking and Bit Rotation
+    -- Stage 0b: Y Input Clamp + Bit Rotation
     -- Latency: 1 clock. Input T+1, output T+2.
-    -- All control inputs (shift amounts, depth, direction) are pre-registered,
-    -- so the critical path is only: data -> bit mux -> AND mask -> register.
+    -- Y clamp: if Y < 32, set Y = 0 before rotation. rol10(0, n) = 0 for any n,
+    -- so clamping to 0 safely prevents near-black luma LSBs from being rotated
+    -- into high bit positions. This does NOT apply to U/V: rol10(512, n) != 512,
+    -- so clamping U/V to 512 here would still produce wrong values after rotation.
+    -- U/V neutral bypass is handled in Stage 0c after the rotation is complete.
+    -- Critical path: data -> 10-way ROL mux -> register.
     --------------------------------------------------------------------------------
     p_rotation_stage : process(clk)
+        variable v_y : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
     begin
         if rising_edge(clk) then
-            if s_direction_r = '0' then
-                s_rotated_y <= rol10(unsigned(s_y_d1), s_shift_y_r) and s_mask_r;
-                s_rotated_u <= rol10(unsigned(s_u_d1), s_shift_u_r) and s_mask_r;
-                s_rotated_v <= rol10(unsigned(s_v_d1), s_shift_v_r) and s_mask_r;
-            else
-                s_rotated_y <= ror10(unsigned(s_y_d1), s_shift_y_r) and s_mask_r;
-                s_rotated_u <= ror10(unsigned(s_u_d1), s_shift_u_r) and s_mask_r;
-                s_rotated_v <= ror10(unsigned(s_v_d1), s_shift_v_r) and s_mask_r;
+            v_y := unsigned(s_y_d1);
+
+            -- Y input clamp: suppress near-black luma before rotation
+            if to_integer(v_y) < 32 then
+                v_y := (others => '0');
             end if;
 
-            -- 2-cycle delayed originals (T+1 data registered to T+2) for blend dry input
-            s_orig_y_d2 <= unsigned(s_y_d1);
-            s_orig_u_d2 <= unsigned(s_u_d1);
-            s_orig_v_d2 <= unsigned(s_v_d1);
+            s_rotated_pre_y <= rol10(v_y, s_eff_shift_y_r);
+            -- U/V rotated without pre-clamping; bypass applied in Stage 0c
+            s_rotated_pre_u <= rol10(unsigned(s_u_d1), s_eff_shift_u_r);
+            s_rotated_pre_v <= rol10(unsigned(s_v_d1), s_eff_shift_v_r);
 
-            s_rotated_valid <= '1';
+            -- Original data forwarded unclamped for dry blend path and Stage 0c bypass check
+            s_y_d2 <= unsigned(s_y_d1);
+            s_u_d2 <= unsigned(s_u_d1);
+            s_v_d2 <= unsigned(s_v_d1);
+
+            s_rotated_pre_valid <= '1';
         end if;
     end process p_rotation_stage;
 
     --------------------------------------------------------------------------------
+    -- Stage 0c: Bit Depth Masking + U/V Neutral Bypass
+    -- Latency: 1 clock. Input T+2, output T+3.
+    -- Y: AND with pre-registered depth mask.
+    -- U/V: if the original value (s_u_d2 / s_v_d2) was within C_UV_CLAMP_RADIUS
+    -- of neutral (512), output 512 directly — discarding the rotation result.
+    -- This is necessary because rotating 512 (0b1000000000) by any non-zero
+    -- shift gives a non-neutral value (e.g. rol10(512,1) = 1), so the rotation
+    -- must be bypassed rather than pre-clamped before it.
+    -- s_u_d2/s_v_d2 are registered T+2 inputs; comparisons vs compile-time
+    -- constants are fast (~2 gate levels), keeping the critical path short.
+    --------------------------------------------------------------------------------
+    p_mask_stage : process(clk)
+    begin
+        if rising_edge(clk) then
+            s_rotated_y <= s_rotated_pre_y and s_mask_r;
+
+            -- U bypass: near-neutral original → output 512; otherwise mask rotated result
+            if (to_integer(s_u_d2) >= 512 - C_UV_CLAMP_RADIUS) and
+               (to_integer(s_u_d2) <  512 + C_UV_CLAMP_RADIUS) then
+                s_rotated_u <= to_unsigned(512, C_VIDEO_DATA_WIDTH);
+            else
+                s_rotated_u <= s_rotated_pre_u and s_mask_r;
+            end if;
+
+            -- V bypass: same logic for V channel
+            if (to_integer(s_v_d2) >= 512 - C_UV_CLAMP_RADIUS) and
+               (to_integer(s_v_d2) <  512 + C_UV_CLAMP_RADIUS) then
+                s_rotated_v <= to_unsigned(512, C_VIDEO_DATA_WIDTH);
+            else
+                s_rotated_v <= s_rotated_pre_v and s_mask_r;
+            end if;
+
+            -- 3-cycle delayed originals (T+2 → T+3) for per-channel blend dry input
+            s_orig_y_d3 <= s_y_d2;
+            s_orig_u_d3 <= s_u_d2;
+            s_orig_v_d3 <= s_v_d2;
+
+            s_rotated_valid <= s_rotated_pre_valid;
+        end if;
+    end process p_mask_stage;
+
+    --------------------------------------------------------------------------------
     -- Stage 1: Per-Channel Wet/Dry Blend
-    -- Latency: 4 clocks. Input T+2, output T+6.
-    -- a = original YUV (dry, 2-cycle delayed), b = rotated YUV (wet)
+    -- Latency: 4 clocks. Input T+3, output T+7.
+    -- a = original YUV (dry, 3-cycle delayed), b = masked+rotated YUV (wet)
     --------------------------------------------------------------------------------
     interp_y : entity work.interpolator_u
         generic map(G_WIDTH=>C_VIDEO_DATA_WIDTH, G_FRAC_BITS=>C_VIDEO_DATA_WIDTH,
                     G_OUTPUT_MIN=>0, G_OUTPUT_MAX=>1023)
         port map(clk=>clk, enable=>s_rotated_valid,
-                 a=>s_orig_y_d2, b=>s_rotated_y, t=>s_blend_y,
+                 a=>s_orig_y_d3, b=>s_rotated_y, t=>s_blend_y,
                  result=>s_blended_y, valid=>s_blended_y_valid);
 
     interp_u : entity work.interpolator_u
         generic map(G_WIDTH=>C_VIDEO_DATA_WIDTH, G_FRAC_BITS=>C_VIDEO_DATA_WIDTH,
                     G_OUTPUT_MIN=>0, G_OUTPUT_MAX=>1023)
         port map(clk=>clk, enable=>s_rotated_valid,
-                 a=>s_orig_u_d2, b=>s_rotated_u, t=>s_blend_u,
+                 a=>s_orig_u_d3, b=>s_rotated_u, t=>s_blend_u,
                  result=>s_blended_u, valid=>s_blended_u_valid);
 
     interp_v : entity work.interpolator_u
         generic map(G_WIDTH=>C_VIDEO_DATA_WIDTH, G_FRAC_BITS=>C_VIDEO_DATA_WIDTH,
                     G_OUTPUT_MIN=>0, G_OUTPUT_MAX=>1023)
         port map(clk=>clk, enable=>s_rotated_valid,
-                 a=>s_orig_v_d2, b=>s_rotated_v, t=>s_blend_v,
+                 a=>s_orig_v_d3, b=>s_rotated_v, t=>s_blend_v,
                  result=>s_blended_v, valid=>s_blended_v_valid);
 
     --------------------------------------------------------------------------------
     -- Delay Line: Original YUV for Global Blend Dry Input
-    -- Delays data_in.y/u/v by 6 clocks: T+0+6 = T+6. Aligned with s_blended at T+6.
+    -- Delays data_in.y/u/v by 7 clocks: T+0+7 = T+7. Aligned with s_blended at T+7.
     --------------------------------------------------------------------------------
     p_global_dry_delay : process(clk)
         type t_data_delay is array (0 to C_PRE_GLOBAL_DELAY_CLKS - 1)
@@ -408,8 +503,8 @@ begin
 
     --------------------------------------------------------------------------------
     -- Stage 2: Global Wet/Dry Blend
-    -- Latency: 4 clocks. Input T+6, output T+10.
-    -- a = original YUV (dry, delayed to T+6), b = per-channel blended YUV
+    -- Latency: 4 clocks. Input T+7, output T+11.
+    -- a = original YUV (dry, delayed to T+7), b = per-channel blended YUV
     --------------------------------------------------------------------------------
     interp_global_y : entity work.interpolator_u
         generic map(G_WIDTH=>C_VIDEO_DATA_WIDTH, G_FRAC_BITS=>C_VIDEO_DATA_WIDTH,

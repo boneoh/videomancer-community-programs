@@ -35,16 +35,14 @@
 --   Register  4: U channel blend (0=dry, 1023=wet)       rotary_potentiometer_5
 --   Register  5: V channel blend (0=dry, 1023=wet)       rotary_potentiometer_6
 --   Register  6: Packed toggle bits:
---     bit 0: Invert/Seed   (ops 0-5: 0=normal, 1=invert masks;
---                           op  6:   0=vsync-reseed LFSR, 1=free-run;
---                           op  7:   no effect)           toggle_switch_7
---     bit 3: Op S2 MSB     (0=Off, 1=On)                 toggle_switch_8
+--     bit 0: Invert        (0=normal, 1=invert masks; no effect for ops 6-7)  toggle_switch_7
+--     bit 1: Op S2 MSB     (0=Off, 1=On)                 toggle_switch_8
 --     bit 2: Op S3         (0=Off, 1=On)                 toggle_switch_9
---     bit 1: Op S4 LSB     (0=Off, 1=On)                 toggle_switch_10
+--     bit 3: Op S4 LSB     (0=Off, 1=On)                 toggle_switch_10
 --     bit 4: Bypass enable (0=Process, 1=Bypass)         toggle_switch_11
 --   Register  7: Global blend (0=dry, 1023=wet)          linear_potentiometer_12
 --
---   Operator encoding (bits 3 downto 1 of register 6):
+--   Operator encoding (bits 1 downto 3 of register 6, S2=MSB S4=LSB):
 --     "000"=AND  "001"=OR   "010"=XOR  "011"=NAND
 --     "100"=NOR  "101"=NXOR "110"=LFSR "111"=PRNG
 --
@@ -61,10 +59,8 @@
 --
 -- LFSR/PRNG:
 --   lfsr16 free-runs continuously (period 2^16-1 = 65535).
---   10-bit lfsr runs continuously; in vsync-seed mode (switch 1 off, op=LFSR)
---   it is reseeded from lfsr16[9:0] on the falling edge of vsync_n.
---   Seed bit 0 is forced high to prevent all-zeros lockup.
---   Random mask = lfsr_out AND channel_mask_knob (XOR applied to channel).
+--   LFSR (op 6): uses bits [15:6] of lfsr16; PRNG (op 7): uses bits [9:0].
+--   Random mask = lfsr16_bits AND channel_mask_knob (XOR applied to channel).
 --------------------------------------------------------------------------------
 library ieee;
 use ieee.std_logic_1164.all;
@@ -119,10 +115,7 @@ architecture yuv_bit_logic of program_top is
     signal s_global_blend   : unsigned(C_VIDEO_DATA_WIDTH - 1 downto 0);
 
     -- LFSR signals
-    signal s_lfsr10_out     : std_logic_vector(C_VIDEO_DATA_WIDTH - 1 downto 0);
     signal s_lfsr16_out     : std_logic_vector(15 downto 0);
-    signal s_vsync_n_prev   : std_logic := '1';
-    signal s_lfsr_reset     : std_logic := '0';
 
     --------------------------------------------------------------------------------
     -- Stage 0a: Control Decode Outputs (T+1)
@@ -199,10 +192,9 @@ begin
 
 
     --------------------------------------------------------------------------------
-    -- LFSR Modules
-    -- lfsr16 free-runs at all times (period 65535).
-    -- lfsr10 free-runs and is optionally reseeded from lfsr16 at vsync.
-    -- Seed bit 0 is forced high to prevent all-zeros lockup.
+    -- LFSR16 Free-Running Noise Generator (period 65535)
+    -- Supplies independent 10-bit windows: bits [15:6] for LFSR mode, [9:0] for PRNG.
+    -- Runs with enable='1' every clock regardless of valid/avid.
     --------------------------------------------------------------------------------
     u_lfsr16 : entity work.lfsr16
         port map (clk    => clk,
@@ -210,15 +202,6 @@ begin
                   seed   => s_lfsr16_out,  -- feedback; load never pulses
                   load   => '0',
                   q      => s_lfsr16_out);
-
-    u_lfsr10 : entity work.lfsr
-        generic map (G_DATA_WIDTH => C_VIDEO_DATA_WIDTH)
-        port map (clk      => clk,
-                  reset    => s_lfsr_reset,
-                  enable   => '1',
-                  seed     => s_lfsr16_out(C_VIDEO_DATA_WIDTH - 1 downto 1) & '1',  -- bit 0 forced high: prevents zero-seed lockup
-                  poly     => "1001000000",
-                  lfsr_out => s_lfsr10_out);
 
     --------------------------------------------------------------------------------
     -- Stage 0a: Control Decode
@@ -232,23 +215,13 @@ begin
             s_mask_y_r      <= unsigned(registers_in(0));
             s_mask_u_r      <= unsigned(registers_in(1));
             s_mask_v_r      <= unsigned(registers_in(2));
-            s_operator_r    <= registers_in(6)(3) & registers_in(6)(2) & registers_in(6)(1); -- {S2=MSB, S3, S4=LSB}
+            -- S2=bit1=MSB, S3=bit2, S4=bit3=LSB → concatenate ascending to preserve {S2,S3,S4} order
+            s_operator_r    <= registers_in(6)(1) & registers_in(6)(2) & registers_in(6)(3);
             s_invert_mask_r <= registers_in(6)(0);
-            s_vsync_n_prev  <= data_in.vsync_n;
             s_y_d1          <= data_in.y;
             s_u_d1          <= data_in.u;
             s_v_d1          <= data_in.v;
             s_avid_d1       <= data_in.avid;
-            -- LFSR reset: registered here to eliminate combinational glitches on
-            -- registers_in during vsync. Output is a flip-flop; fires one clock
-            -- after the vsync falling edge when op=LFSR and switch is on (sync mode).
-            if (data_in.vsync_n = '0' and s_vsync_n_prev = '1')
-                    and (registers_in(6)(3) = '1' and registers_in(6)(2) = '1' and registers_in(6)(1) = '0')
-                    and (registers_in(6)(0) = '1') then   -- 1=off=vsync-reseed, 0=on=free-run
-                s_lfsr_reset <= '1';
-            else
-                s_lfsr_reset <= '0';
-            end if;
         end if;
     end process p_control_decode;
 
@@ -266,8 +239,8 @@ begin
     begin
         if rising_edge(clk) then
             case s_operator_r is
-                when "110" =>  -- LFSR: XOR with gated 10-bit LFSR output
-                    v_rand := unsigned(s_lfsr10_out);
+                when "110" =>  -- LFSR: XOR with gated upper 10 bits of lfsr16 [15:6]
+                    v_rand := unsigned(s_lfsr16_out(15 downto 6));
                     s_processed_y <= unsigned(s_y_d1) xor (v_rand and s_mask_y_r);
                     s_processed_u <= unsigned(s_u_d1) xor (v_rand and s_mask_u_r);
                     s_processed_v <= unsigned(s_v_d1) xor (v_rand and s_mask_v_r);

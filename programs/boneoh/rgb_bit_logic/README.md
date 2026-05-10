@@ -76,8 +76,12 @@ The input YUV signal is converted to RGB, the logic operation is applied, and th
 - **Colour conversion:** BT.601 full-range coefficients implemented as 11 pre-computed BRAM lookup tables (31 of 32 ice40 hx4k BRAM blocks)
 - **Pipeline latency:** 16 clock cycles
 - **FPGA:** Lattice iCE40 HX4K (tq144) on Videomancer rev_b
-- **HD timing:** All six variants meet 74.25 MHz (worst case ~77.6 MHz)
-- **LC utilisation:** ~74% (5711–5725 of 7680)
+- **IOs:** 107 / 256
+- **PLLs:** 0 / 2 (HD targets), 1 / 2 (SD targets)
+- **HD timing:** All six variants meet 74.25 MHz (worst case 81.73 MHz)
+- **LC utilisation:** 5691–5713 of 7680 (~74%)
+- **Package size:** 412,196 bytes (rev_b, unsigned)
+- **Last built:** 2026-05-07
 
 ## Hardware Requirements
 

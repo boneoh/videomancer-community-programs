@@ -1,0 +1,164 @@
+# Copyright (C) 2026 Pete Appleby
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# RGB Band Filter Program Configuration
+#
+# Dual Function: Per-channel RGB filter and matte generation processor.
+#
+# PRIMARY: Multi-Mode Filtering (per-channel, knob-controlled)
+#   - Low Pass: attenuates frequencies above threshold
+#   - High Pass: attenuates frequencies below threshold
+#   - Band Pass: isolates band between Low/High thresholds
+#   - Notch: rejects band between Low/High thresholds
+#
+# SECONDARY: Matte Generation
+#   Operates in RGB space (full BT.601 YUV<->RGB conversion). For each channel,
+#   a Lower and Upper knob define a threshold window. When the lower knob exceeds
+#   the upper knob, the window inverts automatically — no extra switch needed.
+#
+#   Matte Mode (S2/S3/S4 as a 3-bit word, S2=MSB, S4=LSB):
+#     0,0,0  Logical OR    — white if any channel in-window, else black
+#     0,0,1  Bitwise OR    — OR of channel values; failing channels contribute 0
+#     0,1,0  Logical AND   — white if all channels in-window, else black  (default)
+#     0,1,1  Bitwise AND   — AND of channel values; failing channels contribute 0
+#     1,0,0  Luma          — BT.601 luma of the pixel, gated by logical AND
+#     1,0,1  LFSR synced   — frame-locked noise, gated by logical OR
+#     1,1,0  PRNG          — free-running noise, gated by logical OR
+#     1,1,1  Passthrough   — original pixel (no matte generation)
+#
+#   Show Matte (S1 On): outputs the matte as greyscale on all channels.
+#   Show Matte (S1 Off): matte > 0 passes the original pixel; matte = 0 → black.
+
+[program]
+program_id = "com.peteappleby.rgb_band_filter"
+program_name = "RGB Band Filter"
+program_version = "1.0.1"
+abi_version = ">=1.0,<2.0"
+author = "Pete Appleby"
+license = "GPL-3.0"
+categories = ["Color"]
+description = "Dual-function RGB processor: per-channel multi-mode filtering and matte generation with 8 matte modes"
+hardware_compatibility = ["rev_b"]
+core = "yuv444_30b"
+
+# ---------------------------------------------------------------------------
+# KNOBS (Rotary Potentiometers)
+# ---------------------------------------------------------------------------
+
+# Lower thresholds per channel
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_1"
+name_label = "R Low"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 0
+display_float_digits = 1
+suffix_label = "%"
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_2"
+name_label = "G Low"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 0
+display_float_digits = 1
+suffix_label = "%"
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_3"
+name_label = "B Low"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 0
+display_float_digits = 1
+suffix_label = "%"
+
+# Upper thresholds per channel
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_4"
+name_label = "R High"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_5"
+name_label = "G High"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"
+
+[[parameter]]
+parameter_id = "rotary_potentiometer_6"
+name_label = "B High"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"
+
+# ---------------------------------------------------------------------------
+# SWITCHES (Toggle Switches)
+# ---------------------------------------------------------------------------
+
+# Switch 1: Show Matte — outputs the matte as greyscale for previewing the selected region
+[[parameter]]
+parameter_id = "toggle_switch_7"
+name_label = "Show Matte"
+value_labels = ["Off", "On"]
+initial_value_label = "Off"
+
+# Switch 2: Matte Bit 2 (MSB of matte mode word — see mode table above)
+[[parameter]]
+parameter_id = "toggle_switch_8"
+name_label = "Matte Bit 2"
+value_labels = ["0", "1"]
+initial_value_label = "0"
+
+# Switch 3: Matte Bit 1 (middle bit of matte mode word)
+[[parameter]]
+parameter_id = "toggle_switch_9"
+name_label = "Matte Bit 1"
+value_labels = ["0", "1"]
+initial_value_label = "1"
+
+# Switch 4: Matte Bit 0 (LSB of matte mode word)
+[[parameter]]
+parameter_id = "toggle_switch_10"
+name_label = "Matte Bit 0"
+value_labels = ["0", "1"]
+initial_value_label = "0"
+
+# Switch 5: Fine mode — one-eighth-sensitivity for precise threshold adjustment
+[[parameter]]
+parameter_id = "toggle_switch_11"
+name_label = "Fine"
+value_labels = ["Normal", "Fine"]
+initial_value_label = "Normal"
+
+# ---------------------------------------------------------------------------
+# SLIDER (Linear Potentiometer)
+# ---------------------------------------------------------------------------
+
+# Global blend: fade between original (dry) and filtered (wet) output
+[[parameter]]
+parameter_id = "linear_potentiometer_12"
+name_label = "Global Blend"
+control_mode = "linear"
+display_min_value = 0
+display_max_value = 100
+initial_value = 1023
+display_float_digits = 1
+suffix_label = "%"
